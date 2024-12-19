@@ -21,16 +21,24 @@ gh = Github(GITHUB_TOKEN)
 gh_user = gh.get_user()
 
 # Pobierz listę osobistych repozytoriów z GitLab
-projects = gl.projects.list(owned=True, visibility='all', per_page=100, iterator=True)
+try:
+    # Pobiera wszystkie własne repozytoria bez filtrowania widoczności
+    projects = gl.projects.list(owned=True, per_page=100, iterator=True)
+except gitlab.exceptions.GitlabListError as e:
+    print(f"Błąd podczas pobierania repozytoriów z GitLab: {e}")
+    exit(1)
 
 # Funkcja do synchronizacji repozytorium
 def sync_repo(gitlab_project):
     repo_name = gitlab_project.name
     gitlab_repo_url = gitlab_project.http_url_to_repo
     github_repo_name = repo_name
-    github_repo_url = f"https://github.com/{GITHUB_USERNAME}/{github_repo_name}.git"
 
-    print(f"Synchronizowanie repozytorium: {repo_name}")
+    # Konstrukcja URL z tokenem dla GitHub
+    # Format: https://<GITHUB_USERNAME>:<GITHUB_TOKEN>@github.com/<GITHUB_USERNAME>/<repo_name>.git
+    github_repo_url = f"https://{GITHUB_USERNAME}:{GITHUB_TOKEN}@github.com/{GITHUB_USERNAME}/{github_repo_name}.git"
+
+    print(f"\nSynchronizowanie repozytorium: {repo_name}")
 
     # Sprawdź czy repozytorium istnieje na GitHub
     try:
@@ -62,7 +70,7 @@ def sync_repo(gitlab_project):
         shutil.rmtree(temp_dir)
         return
 
-    # Skonfiguruj remote do GitHub
+    # Skonfiguruj remote do GitHub z uwzględnieniem tokenu
     try:
         repo = Repo(temp_dir)
         if 'github' in repo.remotes:
@@ -90,4 +98,4 @@ def sync_repo(gitlab_project):
 for project in projects:
     sync_repo(project)
 
-print("Synchronizacja zakończona.")
+print("\nSynchronizacja zakończona.")
