@@ -4,6 +4,9 @@ from github import Github
 from git import Repo
 import shutil
 from dotenv import load_dotenv
+import gc
+import time
+import tempfile
 
 # Załaduj zmienne środowiskowe z pliku .env
 load_dotenv()
@@ -35,7 +38,6 @@ def sync_repo(gitlab_project):
     github_repo_name = repo_name
 
     # Konstrukcja URL z tokenem dla GitHub
-    # Format: https://<GITHUB_USERNAME>:<GITHUB_TOKEN>@github.com/<GITHUB_USERNAME>/<repo_name>.git
     github_repo_url = f"https://{GITHUB_USERNAME}:{GITHUB_TOKEN}@github.com/{GITHUB_USERNAME}/{github_repo_name}.git"
 
     print(f"\nSynchronizowanie repozytorium: {repo_name}")
@@ -57,42 +59,42 @@ def sync_repo(gitlab_project):
             print(f"Błąd podczas tworzenia repozytorium na GitHub: {e}")
             return
 
-    # Klonuj repozytorium z GitLab
-    temp_dir = f"./temp/{repo_name}"
-    if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
-    os.makedirs(temp_dir, exist_ok=True)
-
+    # Klonuj repozytorium z GitLab do unikalnego katalogu tymczasowego
     try:
-        Repo.clone_from(gitlab_repo_url, temp_dir)
-    except Exception as e:
-        print(f"Błąd podczas klonowania repozytorium {repo_name} z GitLab: {e}")
-        shutil.rmtree(temp_dir)
-        return
+        with tempfile.TemporaryDirectory(prefix=f"{repo_name}_") as temp_dir:
+            try:
+                repo = Repo.clone_from(gitlab_repo_url, temp_dir)
+            except Exception as e:
+                print(f"Błąd podczas klonowania repozytorium {repo_name} z GitLab: {e}")
+                return
 
-    # Skonfiguruj remote do GitHub z uwzględnieniem tokenu
-    try:
-        repo = Repo(temp_dir)
-        if 'github' in repo.remotes:
-            origin = repo.remotes.github
-            origin.set_url(github_repo_url)
-        else:
-            origin = repo.create_remote('github', github_repo_url)
-    except Exception as e:
-        print(f"Błąd podczas konfigurowania remote GitHub: {e}")
-        shutil.rmtree(temp_dir)
-        return
+            # Skonfiguruj remote do GitHub z uwzględnieniem tokenu
+            try:
+                origin = repo.create_remote('github', github_repo_url)
+            except Exception as e:
+                if 'already exists' in str(e):
+                    origin = repo.remotes.github
+                    origin.set_url(github_repo_url)
+                else:
+                    print(f"Błąd podczas konfigurowania remote GitHub: {e}")
+                    return
 
-    # Push do GitHub
-    try:
-        origin.push(refspec='refs/heads/*:refs/heads/*', force=True)
-        origin.push(refspec='refs/tags/*:refs/tags/*', force=True)
-        print(f"Repozytorium {repo_name} zostało zsynchronizowane na GitHub.")
+            # Push do GitHub
+            try:
+                origin.push(refspec='refs/heads/*:refs/heads/*', force=True)
+                origin.push(refspec='refs/tags/*:refs/tags/*', force=True)
+                print(f"Repozytorium {repo_name} zostało zsynchronizowane na GitHub.")
+            except Exception as e:
+                print(f"Błąd podczas pushowania do GitHub: {e}")
+            finally:
+                # Usuń referencje do repozytorium
+                del origin
+                del repo
+                gc.collect()
+                # Dodaj opóźnienie, aby upewnić się, że system zwolni pliki
+                time.sleep(2)
     except Exception as e:
-        print(f"Błąd podczas pushowania do GitHub: {e}")
-    finally:
-        # Usuń tymczasowe repozytorium
-        shutil.rmtree(temp_dir)
+        print(f"Błąd podczas obsługi katalogu tymczasowego: {e}")
 
 # Synchronizuj każde repozytorium
 for project in projects:
