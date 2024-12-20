@@ -1,103 +1,145 @@
 import os
 import gitlab
-from github import Github
-from git import Repo
+from github import Github, GithubException
+from git import Repo, GitCommandError
 import shutil
 from dotenv import load_dotenv
 import gc
 import time
 import tempfile
+import string
+import logging
 
-# Załaduj zmienne środowiskowe z pliku .env
+# Konfiguracja logowania do pliku oraz konsoli
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s:%(levelname)s:%(message)s',
+    handlers=[
+        logging.FileHandler('sync_repos.log'),
+        logging.StreamHandler()
+    ]
+)
+
+# Ładowanie zmiennych środowiskowych z pliku .env
 load_dotenv()
 
 GITLAB_TOKEN = os.getenv('GITLAB_TOKEN')
-GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
+GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')  # Opcjonalnie, jeśli używasz SSH
 GITHUB_USERNAME = os.getenv('GITHUB_USERNAME')
+
+def sanitize_description(description):
+    """
+    Funkcja do usuwania znaków kontrolnych i nowych linii z opisu repozytorium.
+    """
+    if description:
+        # Usunięcie znaków kontrolnych i nowych linii
+        return ''.join(char for char in description if char in string.printable and char not in ['\n', '\r'])
+    return ""
 
 # Inicjalizacja klienta GitLab
 gl = gitlab.Gitlab('https://gitlab.com', private_token=GITLAB_TOKEN)
-gl.auth()
-
-# Inicjalizacja klienta GitHub
-gh = Github(GITHUB_TOKEN)
-gh_user = gh.get_user()
-
-# Pobierz listę osobistych repozytoriów z GitLab
 try:
-    # Pobiera wszystkie własne repozytoria bez filtrowania widoczności
-    projects = gl.projects.list(owned=True, per_page=100, iterator=True)
-except gitlab.exceptions.GitlabListError as e:
-    print(f"Błąd podczas pobierania repozytoriów z GitLab: {e}")
+    gl.auth()
+    logging.info("Pomyślnie uwierzytelniono się w GitLab.")
+except gitlab.exceptions.GitlabAuthenticationError as e:
+    logging.error(f"Uwierzytelnianie w GitLab nie powiodło się: {e}")
     exit(1)
 
-# Funkcja do synchronizacji repozytorium
+# Inicjalizacja klienta GitHub
+gh = Github(GITHUB_TOKEN)  # GitHub token jest potrzebny do tworzenia repozytoriów
+try:
+    gh_user = gh.get_user()
+    logging.info("Pomyślnie uwierzytelniono się w GitHub.")
+except GithubException as e:
+    logging.error(f"Uwierzytelnianie w GitHub nie powiodło się: {e}")
+    exit(1)
+
+# Pobranie wszystkich repozytoriów własnych z GitLab
+try:
+    projects = gl.projects.list(owned=True, per_page=100, iterator=True)
+    projects_list = list(projects)
+    logging.info(f"Pobrano {len(projects_list)} repozytoriów z GitLab.")
+except gitlab.exceptions.GitlabListError as e:
+    logging.error(f"Błąd podczas pobierania repozytoriów z GitLab: {e}")
+    exit(1)
+
 def sync_repo(gitlab_project):
+    """
+    Funkcja do synchronizacji pojedynczego repozytorium z GitLab do GitHub.
+    """
     repo_name = gitlab_project.name
-    gitlab_repo_url = gitlab_project.http_url_to_repo
+    gitlab_repo_url = gitlab_project.ssh_url_to_repo  # Używanie URL SSH dla GitLab
     github_repo_name = repo_name
 
-    # Konstrukcja URL z tokenem dla GitHub
-    github_repo_url = f"https://{GITHUB_USERNAME}:{GITHUB_TOKEN}@github.com/{GITHUB_USERNAME}/{github_repo_name}.git"
+    # Konstrukcja URL SSH dla GitHub
+    github_repo_url = f"git@github.com:{GITHUB_USERNAME}/{github_repo_name}.git"
 
-    print(f"\nSynchronizowanie repozytorium: {repo_name}")
+    logging.info(f"Synchronizowanie repozytorium: {repo_name}")
 
-    # Sprawdź czy repozytorium istnieje na GitHub
+    # Sprawdzenie, czy repozytorium istnieje na GitHub
     try:
         gh_repo = gh_user.get_repo(github_repo_name)
-        print(f"Repozytorium {github_repo_name} istnieje na GitHub. Aktualizacja...")
-    except Exception as e:
-        print(f"Repozytorium {github_repo_name} nie istnieje na GitHub. Tworzenie...")
-        try:
-            gh_repo = gh_user.create_repo(
-                name=github_repo_name,
-                private=gitlab_project.visibility == 'private',
-                description=gitlab_project.description or ""
-            )
-            print(f"Repozytorium {github_repo_name} zostało utworzone na GitHub.")
-        except Exception as e:
-            print(f"Błąd podczas tworzenia repozytorium na GitHub: {e}")
+        logging.info(f"Repozytorium {github_repo_name} istnieje na GitHub. Aktualizacja...")
+    except GithubException as e:
+        if e.status == 404:
+            # Repozytorium nie istnieje, tworzenie
+            try:
+                gh_repo = gh_user.create_repo(
+                    name=github_repo_name,
+                    private=gitlab_project.visibility == 'private',
+                    description=sanitize_description(gitlab_project.description)
+                )
+                logging.info(f"Repozytorium {github_repo_name} zostało utworzone na GitHub.")
+            except GithubException as e:
+                logging.error(f"Błąd podczas tworzenia repozytorium {github_repo_name} na GitHub: {e.data}")
+                return
+        else:
+            logging.error(f"Błąd podczas pobierania repozytorium {github_repo_name} na GitHub: {e.data}")
             return
 
-    # Klonuj repozytorium z GitLab do unikalnego katalogu tymczasowego
+    # Użycie tymczasowego katalogu do klonowania
     try:
         with tempfile.TemporaryDirectory(prefix=f"{repo_name}_") as temp_dir:
             try:
                 repo = Repo.clone_from(gitlab_repo_url, temp_dir)
-            except Exception as e:
-                print(f"Błąd podczas klonowania repozytorium {repo_name} z GitLab: {e}")
+                logging.info(f"Repozytorium {repo_name} zostało sklonowane do {temp_dir}.")
+            except GitCommandError as e:
+                logging.error(f"Błąd podczas klonowania repozytorium {repo_name} z GitLab: {e.stderr}")
                 return
 
-            # Skonfiguruj remote do GitHub z uwzględnieniem tokenu
+            # Konfiguracja zdalnego repozytorium GitHub
             try:
                 origin = repo.create_remote('github', github_repo_url)
-            except Exception as e:
+                logging.info(f"Zdalne repozytorium GitHub zostało skonfigurowane.")
+            except GitCommandError as e:
                 if 'already exists' in str(e):
                     origin = repo.remotes.github
                     origin.set_url(github_repo_url)
+                    logging.info(f"Zdalne repozytorium GitHub już istnieje. URL zostało zaktualizowane.")
                 else:
-                    print(f"Błąd podczas konfigurowania remote GitHub: {e}")
+                    logging.error(f"Błąd podczas konfigurowania zdalnego repozytorium GitHub dla {github_repo_name}: {e.stderr}")
                     return
 
-            # Push do GitHub
+            # Pushowanie do GitHub z wymuszeniem
             try:
                 origin.push(refspec='refs/heads/*:refs/heads/*', force=True)
                 origin.push(refspec='refs/tags/*:refs/tags/*', force=True)
-                print(f"Repozytorium {repo_name} zostało zsynchronizowane na GitHub.")
-            except Exception as e:
-                print(f"Błąd podczas pushowania do GitHub: {e}")
-            finally:
-                # Usuń referencje do repozytorium
-                del origin
-                del repo
-                gc.collect()
-                # Dodaj opóźnienie, aby upewnić się, że system zwolni pliki
-                time.sleep(2)
-    except Exception as e:
-        print(f"Błąd podczas obsługi katalogu tymczasowego: {e}")
+                logging.info(f"Repozytorium {repo_name} zostało pomyślnie zsynchronizowane na GitHub.")
+            except GitCommandError as e:
+                logging.error(f"Błąd podczas pushowania repozytorium {repo_name} na GitHub: {e.stderr}")
+                return
 
-# Synchronizuj każde repozytorium
-for project in projects:
+            # Czyszczenie referencji
+            del origin
+            del repo
+            gc.collect()
+            time.sleep(1)  # Upewnienie się, że wszystkie uchwyty plików są zwolnione
+
+    except Exception as e:
+        logging.error(f"Błąd podczas obsługi katalogu tymczasowego dla repozytorium {repo_name}: {e}", exc_info=True)
+
+# Iteracja po wszystkich projektach i synchronizacja
+for project in projects_list:
     sync_repo(project)
 
-print("\nSynchronizacja zakończona.")
+logging.info("Synchronizacja zakończona.")
