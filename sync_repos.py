@@ -129,14 +129,10 @@ def sync_repo(gitlab_project):
     """
     original_repo_name = gitlab_project.name
     github_repo_name = sanitize_repo_name(original_repo_name)
+    gitlab_repo_url = gitlab_project.http_url_to_repo  # Używanie URL HTTPS dla GitLab
 
-    # Konstrukcja URL HTTPS dla Gitlab i GitHub z tokenem
-    #gitlab_repo_url = gitlab_project.http_url_to_repo
-    #github_repo_url = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_USERNAME}/{github_repo_name}.git"
-
-    # Konstrukcja URL SSH dla Gitlab i GitHub
-    gitlab_repo_url = gitlab_project.ssh_url_to_repo
-    github_repo_url = f"git@github.com:{GITHUB_USERNAME}/{github_repo_name}.git"
+    # Konstrukcja URL HTTPS dla GitHub z tokenem
+    github_repo_url = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_USERNAME}/{github_repo_name}.git"
 
     logger.info(f"Synchronizowanie repozytorium: {original_repo_name}")
 

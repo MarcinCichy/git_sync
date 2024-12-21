@@ -1,26 +1,32 @@
-# GitLab to GitHub Repository Sync
+# Git Sync
 
-An automated Python script to synchronize your personal repositories from GitLab to GitHub, keeping GitLab as the primary source. Repositories on GitHub are updated or created based on the state of your repositories on GitLab.
+Git Sync is a Python-based tool designed to automate the synchronization of your repositories from GitLab to GitHub. It streamlines the process of cloning repositories from GitLab and pushing them to GitHub, ensuring your repositories are consistently up-to-date across both platforms. The tool supports both SSH and HTTPS connections, providing flexibility based on your preferred authentication method.
 
 ## Table of Contents
 
-- [Features](#features)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Automation](#automation)
-- [Security](#security)
-- [Contributing](#contributing)
-- [License](#license)
+- [Git Sync](#git-sync)
+  - [Features](#features)
+  - [Table of Contents](#table-of-contents)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [Configuration](#configuration)
+  - [Usage](#usage)
+  - [Choosing Connection Type](#choosing-connection-type)
+    - [SSH Setup](#ssh-setup)
+    - [HTTPS Setup](#https-setup)
+  - [Project Structure](#project-structure)
+  - [Troubleshooting](#troubleshooting)
+  - [Contributing](#contributing)
+  - [License](#license)
 
 ## Features
 
-- **Repository Synchronization:** Automatically clones and pushes repositories from GitLab to GitHub.
-- **GitHub Repository Creation:** If a repository does not exist on GitHub, it is automatically created.
-- **Repository Updates:** GitHub repositories are overwritten with the latest changes from GitLab.
-- **Branch and Tag Support:** Synchronizes all branches and tags from GitLab to GitHub.
-- **Security:** Access tokens are stored in a `.env` file, which is ignored by Git.
+- **Automated Synchronization**: Syncs all your owned repositories from GitLab to GitHub.
+- **SSH and HTTPS Support**: Choose between SSH and HTTPS for connecting to GitHub.
+- **Sanitization**: Automatically sanitizes repository names and descriptions to comply with GitHub’s requirements.
+- **Logging**: Detailed logging with color-coded console output and log files for easy monitoring.
+- **Modular Structure**: Organized codebase divided into logical modules for better maintainability and scalability.
+- **Secure**: Uses environment variables to manage sensitive information like tokens.
 
 ## Requirements
 
@@ -38,10 +44,11 @@ An automated Python script to synchronize your personal repositories from GitLab
     cd gitlab-to-github-sync
     ```
 
-2. **Create and Activate a Virtual Environment:**
+2. **Create a Virtual Environment (Optional but Recommended)**
 
     ```bash
     python -m venv .venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
     ```
 
     - **On Unix/Linux/MacOS:**
@@ -62,11 +69,6 @@ An automated Python script to synchronize your personal repositories from GitLab
     pip install -r requirements.txt
     ```
 
-    If you don't have a `requirements.txt` file, install the packages manually:
-
-    ```bash
-    pip install python-gitlab PyGithub gitpython python-dotenv
-    ```
 
 ## Configuration
 
@@ -89,14 +91,24 @@ An automated Python script to synchronize your personal repositories from GitLab
     In the project directory, create a `.env` file and add your tokens and GitHub username:
 
     ```env
+    # Access Tokens
     GITLAB_TOKEN=your_gitlab_token
     GITHUB_TOKEN=your_github_token
     GITHUB_USERNAME=your_github_username
+
+    # GitHub Connection Type (ssh or https)
+    GITHUB_CONNECTION=https
     ```
 
     **Notes:**
     - Ensure that the `.env` file is added to `.gitignore` to prevent accidental publication.
 
+    - **GITLAB_TOKEN**: Your GitLab personal access token with appropriate permissions.
+    - **GITHUB_TOKEN**: Your GitHub personal access token with repo scope if using HTTPS.
+    - **GITHUB_USERNAME**: Your GitHub username.
+    - **GITHUB_CONNECTION**: Choose ssh or https based on your preferred connection type.
+
+    
 3. **Add `.env` to `.gitignore`:**
 
     If you don't have a `.gitignore` file yet, create one and add the following:
@@ -125,37 +137,92 @@ An automated Python script to synchronize your personal repositories from GitLab
 2. **Run the Script:**
 
     ```bash
-    python sync_repos.py
+    python main.py
     ```
 
     **Description:**
     - The script will fetch all your personal repositories from GitLab and synchronize them to GitHub. If a repository does not exist on GitHub, it will be created. All branches and tags will be pushed to GitHub.
 
-## Automation
+## Choosing Connection Type
 
-To automatically synchronize repositories at regular intervals, you can set up a cron job (on Unix/Linux/MacOS) or use Task Scheduler (on Windows).
+You can choose between SSH and HTTPS for connecting to GitHub by setting the GITHUB_CONNECTION variable in your .env file.
 
-### Example Cron Job (Unix/Linux/MacOS)
+## SSH Setup
+If you prefer using SSH for authentication, follow these steps:
 
-1. **Open Crontab:**
+1. **Set Connection Type to SSH**
 
     ```bash
-    crontab -e
+    env
+    
+    GITHUB_CONNECTION=ssh
     ```
 
-2. **Add a Line to Sync Daily at 2:00 AM:**
+2. **Generate SSH Key (If Not Already Done)**
 
-    ```cron
-    0 2 * * * /path/to/git_sync/.venv/bin/python /path/to/git_sync/sync_repos.py >> /path/to/git_sync/sync.log 2>&1
+    ```bash
+    
+    ssh-keygen -t ed25519 -C "your_email@example.com"
     ```
+    Follow the prompts to generate the key pair. By default, keys are stored in ~/.ssh/id_ed25519 and ~/.ssh/id_ed25519.pub.
 
-### Example Task Scheduler (Windows)
 
-1. **Open Task Scheduler:**
-   - `Start` > `Administrative Tools` > `Task Scheduler`
+3. **Add SSH Key to ssh-agent**
 
-2. **Create a New Task:**
-   - Click `Create Task` and configure the appropriate settings, such as name, trigger time, and actions (running Python and the script).
+    ```bash
+    
+    eval "$(ssh-agent -s)"
+    ssh-add ~/.ssh/id_ed25519
+    ```
+4. **Add SSH Key to GitHub**
+
+   - Copy the contents of your public key to the clipboard:
+
+    ```bash
+    cat ~/.ssh/id_ed25519.pub
+    ```
+    - Go to GitHub Settings > SSH and GPG keys > New SSH key.
+
+    - Paste the key and save.
+
+5. **Test SSH Connection**
+
+    ```bash
+    
+    ssh -T git@github.com
+    ```
+    You should see a message like:
+
+    ```vbnet
+    Hi YourUsername! You've successfully authenticated, but GitHub does not provide shell access.
+    ```
+## HTTPS Setup
+If you prefer using HTTPS for authentication, follow these steps:
+
+1. **Set Connection Type to HTTPS**
+
+    ```bash
+    env
+   GITHUB_CONNECTION=https
+    ```
+2. **Create a GitHub Personal Access Token (PAT)**
+
+
+- Go to GitHub Settings.
+- Click on Generate new token.
+- Select the repo scope for full access to your repositories.
+- Generate and copy the token.
+3. **Add PAT to .env**
+
+    Ensure your .env file includes your PAT as GITHUB_TOKEN:
+    ```bash
+    env
+    GITHUB_TOKEN=your_github_token
+    ```
+4. **Test HTTPS Connection**
+
+    The script will automatically use the PAT to authenticate when pushing via HTTPS.
+
 
 ## Security
 
@@ -165,6 +232,33 @@ To automatically synchronize repositories at regular intervals, you can set up a
 
 - **Limiting Token Permissions:**
   - Create tokens with the minimum required permissions to reduce the risk in case they are exposed.
+
+## Project Structure
+```bash
+git_sync/
+│
+├── main.py
+├── config.py
+├── logger.py
+├── gitlab_client.py
+├── github_client.py
+├── repo_sync.py
+├── utils.py
+├── requirements.txt
+└── .env
+```
+### Description of Files
+- **main.py**: The entry point of the application. It initializes clients, retrieves repositories, and triggers synchronization.
+- **config.py**: Handles configuration and environment variables.
+- **logger.py**: Sets up logging with color-coded output and file logging.
+- **gitlab_client.py**: Manages interactions with the GitLab API.
+- **github_client.py**: Manages interactions with the GitHub API.
+- **repo_sync.py**: Contains the logic to synchronize individual repositories.
+- **utils.py**: Utility functions for sanitizing repository names and descriptions.
+- **requirements.txt**: Lists Python dependencies.
+- **.env**: Stores configuration variables and secrets (not tracked by version control).
+
+
 
 ## Contributing
 
