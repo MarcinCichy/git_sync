@@ -1,7 +1,6 @@
-# gitlab_client.py
-
 import gitlab
 from config import Config
+
 
 class GitLabClient:
     def __init__(self, logger):
