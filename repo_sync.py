@@ -4,6 +4,7 @@ import time
 from git import Repo, GitCommandError
 from utils import sanitize_repo_name, sanitize_description
 
+
 def sync_repo(gitlab_project, gitlab_client, github_client, logger, connection_type):
     """
     Synchronizuje pojedyncze repozytorium z GitLab do GitHub.
@@ -45,6 +46,7 @@ def sync_repo(gitlab_project, gitlab_client, github_client, logger, connection_t
             repo_exists = False
         else:
             # Nie udało się utworzyć repozytorium
+            logger.error(f"Nie udało się utworzyć repozytorium {github_repo_name} na GitHub.")
             return
 
     if repo_exists:
@@ -64,7 +66,7 @@ def sync_repo(gitlab_project, gitlab_client, github_client, logger, connection_t
             logger.info(f"Repozytorium {github_repo_name} jest już aktualne na GitHub.")
             return
         else:
-            logger.warning(f"Repozytorium {github_repo_name} różni się od GitHub. Aktualizacja...")
+            logger.info(f"Repozytorium {github_repo_name} różni się od GitHub. Aktualizacja...")
 
     # Użycie tymczasowego katalogu do klonowania
     try:
@@ -91,9 +93,20 @@ def sync_repo(gitlab_project, gitlab_client, github_client, logger, connection_t
 
             # Pushowanie do GitHub z wymuszeniem
             try:
-                origin.push(refspec='refs/heads/*:refs/heads/*', force=True)
-                origin.push(refspec='refs/tags/*:refs/tags/*', force=True)
-                logger.warning(f"Repozytorium {github_repo_name} zostało pomyślnie zsynchronizowane na GitHub.")
+                push_results = origin.push(all=True, force=True)  # Pushuje wszystkie gałęzie
+                push_results_tags = origin.push(refspec='refs/tags/*:refs/tags/*', force=True)  # Pushuje wszystkie tagi
+
+                # Sprawdzenie, czy push się powiódł
+                push_failed = False
+                for result in push_results + push_results_tags:
+                    if result.flags & result.ERROR:
+                        logger.error(f"Błąd podczas pushowania: {result.summary}")
+                        push_failed = True
+
+                if not push_failed:
+                    logger.info(f"Repozytorium {github_repo_name} zostało pomyślnie zsynchronizowane na GitHub.")
+                else:
+                    logger.warning(f"Repozytorium {github_repo_name} zostało zsynchronizowane, ale wystąpiły błędy podczas pushowania.")
             except GitCommandError as e:
                 logger.error(f"Błąd podczas pushowania repozytorium {github_repo_name} na GitHub: {e.stderr}")
                 return
