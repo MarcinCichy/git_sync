@@ -66,7 +66,7 @@ def sync_repo(gitlab_project, gitlab_client, github_client, logger, connection_t
             logger.info(f"Repozytorium {github_repo_name} jest już aktualne na GitHub.")
             return
         else:
-            logger.info(f"Repozytorium {github_repo_name} różni się od GitHub. Aktualizacja...")
+            logger.warning(f"Repozytorium {github_repo_name} różni się od GitHub. Aktualizacja...")
 
     # Użycie tymczasowego katalogu do klonowania
     try:
@@ -104,7 +104,7 @@ def sync_repo(gitlab_project, gitlab_client, github_client, logger, connection_t
                         push_failed = True
 
                 if not push_failed:
-                    logger.info(f"Repozytorium {github_repo_name} zostało pomyślnie zsynchronizowane na GitHub.")
+                    logger.warning(f"Repozytorium {github_repo_name} zostało pomyślnie zsynchronizowane na GitHub.")
                 else:
                     logger.warning(f"Repozytorium {github_repo_name} zostało zsynchronizowane, ale wystąpiły błędy podczas pushowania.")
             except GitCommandError as e:
