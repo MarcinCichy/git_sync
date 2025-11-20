@@ -4,16 +4,10 @@ import time
 from git import Repo, GitCommandError
 from utils import sanitize_repo_name, sanitize_description
 
+
 def sync_repo(gitlab_project, gitlab_client, github_client, logger, connection_type):
     """
-    Synchronizuje pojedyncze repozytorium z GitLab do GitHub.
-
-    Parameters:
-        gitlab_project: Obiekt projektu z GitLab.
-        gitlab_client: Instancja GitLabClient.
-        github_client: Instancja GitHubClient.
-        logger: Logger do logowania.
-        connection_type: 'ssh' lub 'https'.
+    Synchronizuje pojedyncze repozytorium z GitLab do GitHub w trybie LUSTRZANYM (mirror).
     """
     original_repo_name = gitlab_project.name
     github_repo_name = sanitize_repo_name(original_repo_name)
@@ -26,12 +20,13 @@ def sync_repo(gitlab_project, gitlab_client, github_client, logger, connection_t
         gitlab_repo_url = gitlab_project.http_url_to_repo
         github_repo_url = f"https://{github_client.token}@github.com/{github_client.gh_user.login}/{github_repo_name}.git"
 
-    logger.info(f"Synchronizowanie repozytorium: {original_repo_name}")
+    logger.info(f"Analiza repozytorium: {original_repo_name} -> {github_repo_name}")
 
-    # Sprawdzenie, czy repozytorium istnieje na GitHub
+    # 1. Sprawdzenie czy repozytorium istnieje na GitHub
     gh_repo = github_client.get_repo(github_repo_name)
+    repo_exists = False
+
     if gh_repo:
-        logger.info(f"Repozytorium {github_repo_name} istnieje na GitHub. Sprawdzanie aktualności...")
         repo_exists = True
     else:
         # Tworzenie repozytorium na GitHub
@@ -40,76 +35,77 @@ def sync_repo(gitlab_project, gitlab_client, github_client, logger, connection_t
             private=gitlab_project.visibility == 'private',
             description=sanitize_description(gitlab_project.description)
         )
-        if gh_repo:
-            repo_exists = False
-        else:
-            logger.error(f"Nie udało się utworzyć repozytorium {github_repo_name} na GitHub.")
+        if not gh_repo:
+            logger.error(f"Nie udało się utworzyć ani znaleźć repozytorium {github_repo_name}.")
             return
 
-    # NOWA LOGIKA: porównywanie nie tylko commitów domyślnej gałęzi, ale i gałęzi
+    # 2. Logika sprawdzania czy synchronizacja jest potrzebna
+    needs_sync = True
+
     if repo_exists:
-        # Pobierz wszystkie gałęzie z GitLaba
         try:
-            gitlab_branches = [b.name for b in gitlab_project.branches.list(all=True)]
+            latest_commit_gitlab = gitlab_client.get_latest_commit(gitlab_project)
+            default_branch = gitlab_project.default_branch or 'main'
+            latest_commit_github = github_client.get_latest_commit(gh_repo, default_branch)
+
+            # Pobieramy nazwy gałęzi jako zbiory (set)
+            gitlab_branches = {b.name for b in gitlab_project.branches.list(all=True)}
+            github_branches = {b.name for b in gh_repo.get_branches()}
+
+            if latest_commit_github == latest_commit_gitlab and gitlab_branches == github_branches:
+                logger.info(f"Repozytorium {github_repo_name} jest w pełni aktualne (commity i struktura gałęzi).")
+                needs_sync = False
+            else:
+                logger.warning(f"Wykryto różnice w {github_repo_name}. Rozpoczynam synchronizację...")
+
         except Exception as e:
-            logger.error(f"Błąd podczas pobierania gałęzi z GitLab dla {original_repo_name}: {e}")
-            gitlab_branches = []
+            logger.warning(f"Nie udało się zweryfikować statusu repozytorium, wymuszam synchronizację: {e}")
+            needs_sync = True
 
-        # Pobierz wszystkie gałęzie z GitHuba
-        try:
-            github_branches = [b.name for b in gh_repo.get_branches()]
-        except Exception as e:
-            logger.error(f"Błąd podczas pobierania gałęzi z GitHub dla {github_repo_name}: {e}")
-            github_branches = []
+    if not needs_sync:
+        return
 
-        # Porównaj domyślną gałąź (jak było)
-        latest_commit_gitlab = gitlab_client.get_latest_commit(gitlab_project)
-        default_branch = gitlab_project.default_branch or 'main'
-        latest_commit_github = github_client.get_latest_commit(gh_repo, default_branch)
-
-        # WARUNEK: czy repozytoria są identyczne? (commit na main i ten sam zestaw branchy)
-        if (latest_commit_github == latest_commit_gitlab and set(gitlab_branches) == set(github_branches)):
-            logger.info(f"Repozytorium {github_repo_name} jest już aktualne na GitHub (commity i gałęzie identyczne).")
-            return
-        else:
-            logger.warning(f"Repozytorium {github_repo_name} wymaga synchronizacji (zmiany w branchach lub commitach).")
-
-    # --- Jeżeli wymagana synchronizacja, wykonaj klonowanie i push ---
+    # 3. Synchronizacja typu MIRROR
     try:
         with tempfile.TemporaryDirectory(prefix=f"{github_repo_name}_") as temp_dir:
+
+            # A. KLONOWANIE Z OPCJĄ --mirror
+            logger.info(f"Klonowanie (mirror) z GitLab...")
             try:
-                repo = Repo.clone_from(gitlab_repo_url, temp_dir)
-                logger.info(f"Repozytorium {original_repo_name} zostało sklonowane do {temp_dir}.")
+                repo = Repo.clone_from(
+                    gitlab_repo_url,
+                    temp_dir,
+                    multi_options=['--mirror']
+                )
             except GitCommandError as e:
-                logger.error(f"Błąd podczas klonowania repozytorium {original_repo_name} z GitLab: {e.stderr}")
+                logger.error(f"Błąd klonowania {original_repo_name}: {e.stderr}")
                 return
 
-            # Konfiguracja remote do GitHub
+            # B. Konfiguracja remote GitHub
             try:
-                origin = repo.create_remote('github', github_repo_url)
-                logger.info(f"Zdalne repozytorium GitHub zostało skonfigurowane.")
-            except GitCommandError as e:
-                if 'already exists' in str(e):
-                    origin = repo.remotes.github
-                    origin.set_url(github_repo_url)
-                    logger.warning(f"Zdalne repozytorium GitHub już istnieje. URL zostało zaktualizowane.")
-                else:
-                    logger.error(f"Błąd podczas konfigurowania zdalnego repozytorium GitHub dla {github_repo_name}: {e.stderr}")
-                    return
+                if 'origin' in repo.remotes:
+                    repo.delete_remote('origin')
 
-            # Push wszystkich branchy i tagów
-            try:
-                origin.push(refspec='refs/heads/*:refs/heads/*', force=True)
-                origin.push(refspec='refs/tags/*:refs/tags/*', force=True)
-                logger.info(f"Repozytorium {github_repo_name} zostało pomyślnie zsynchronizowane na GitHub.")
-            except GitCommandError as e:
-                logger.error(f"Błąd podczas pushowania repozytorium {github_repo_name} na GitHub: {e.stderr}")
+                gh_remote = repo.create_remote('github_target', github_repo_url)
+            except Exception as e:
+                logger.error(f"Błąd konfiguracji remote: {e}")
                 return
 
-            del origin
+            # C. PUSH Z OPCJĄ --mirror
+            logger.info(f"Wypychanie (mirror) do GitHub...")
+            try:
+                # --- TU BYŁ BŁĄD, TERAZ JEST POPRAWKA ---
+                # Używamy argumentu nazwanego mirror=True, zamiast listy ['--mirror']
+                gh_remote.push(mirror=True)
+                logger.info(f"Sukces: {github_repo_name} zsynchronizowane.")
+            except GitCommandError as e:
+                logger.error(f"Błąd podczas pushowania do GitHub: {e.stderr}")
+                return
+
+            repo.close()
             del repo
             gc.collect()
-            time.sleep(1)
+            time.sleep(0.5)
 
     except Exception as e:
-        logger.error(f"Błąd podczas obsługi katalogu tymczasowego dla repozytorium {github_repo_name}: {e}", exc_info=True)
+        logger.error(f"Nieoczekiwany błąd przy repozytorium {github_repo_name}: {e}", exc_info=True)
